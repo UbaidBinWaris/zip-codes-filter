@@ -1,34 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jwtVerify } from "jose";
+
+/**
+ * Returns the signing key as a Uint8Array.
+ * `jose` uses the Web Crypto API — no Node.js built-ins — so this runs
+ * correctly in the Next.js Edge Runtime.
+ */
+function signingKey(): Uint8Array {
+  return new TextEncoder().encode(process.env.AUTH_SECRET ?? "");
+}
+
+function redirectToLogin(request: NextRequest, from: string): NextResponse {
+  const url = new URL("/admin/login", request.url);
+  url.searchParams.set("from", from);
+  return NextResponse.redirect(url);
+}
 
 /**
  * Protects all /admin routes except /admin/login.
- * Validates the HTTP-only session cookie set by POST /api/admin/login.
+ *
+ * Reads the `admin_token` HTTP-only cookie and verifies its JWT signature
+ * against AUTH_SECRET. Each device holds its own independently-signed token,
+ * so logging in on one device never invalidates another device's session.
  */
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Always allow the login page itself
+  // Always let the login page through
   if (pathname === "/admin/login") {
     return NextResponse.next();
   }
 
-  const session = request.cookies.get("admin_session");
-  const isAuthenticated =
-    session?.value &&
-    process.env.AUTH_SECRET &&
-    session.value === process.env.AUTH_SECRET;
+  const token = request.cookies.get("admin_token")?.value;
 
-  if (!isAuthenticated) {
-    const loginUrl = new URL("/admin/login", request.url);
-    // Preserve the original destination so the login page can redirect back
-    loginUrl.searchParams.set("from", pathname);
-    return NextResponse.redirect(loginUrl);
+  if (!token) {
+    return redirectToLogin(request, pathname);
   }
 
-  return NextResponse.next();
+  try {
+    // Throws if the signature is invalid or the token has expired
+    await jwtVerify(token, signingKey());
+    return NextResponse.next();
+  } catch {
+    // Expired or tampered token — send to login
+    return redirectToLogin(request, pathname);
+  }
 }
 
 export const config = {
-  // Apply only to /admin and its sub-paths
   matcher: ["/admin/:path*"],
 };
