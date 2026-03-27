@@ -23,7 +23,7 @@ interface Props {
 }
 
 const DEBOUNCE_MS = 300;
-const MIN_QUERY = 3;
+const MIN_QUERY = 5;
 /** Maximum number of ZIPs for which we will request location data. */
 const LOCATION_FETCH_LIMIT = 50;
 
@@ -94,7 +94,7 @@ export default function ZipSearch({ index }: Props) {
   // ── Search ─────────────────────────────────────────────────────────────────
   const results: ZipResult[] = useMemo(() => {
     if (query.trim().length < MIN_QUERY) return [];
-    return search(index, query);
+    return search(index, query).filter((r) => r.matchType === "exact");
   }, [index, query]);
 
   // Keep ref in sync so handleKeyDown always sees the latest length
@@ -222,7 +222,7 @@ export default function ZipSearch({ index }: Props) {
             Search across {index.rows.length.toLocaleString()} ZIP entries
           </p>
           <p className="text-sm text-gray-300">
-            Exact · Prefix · Substring — ranked by relevance
+            Enter a full 5-digit ZIP code to find matches
           </p>
         </div>
       )}

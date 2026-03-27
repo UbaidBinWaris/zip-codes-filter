@@ -284,10 +284,6 @@ export default function ResultsTable({ results, query, selectedIndex, locationMa
 
   if (results.length === 0) return null;
 
-  const exactCount = results.filter((r) => r.matchType === "exact").length;
-  const prefixCount = results.filter((r) => r.matchType === "prefix").length;
-  const substringCount = results.filter((r) => r.matchType === "substring").length;
-
   return (
     <div className="mt-6">
       {/* Cards grid */}
@@ -314,27 +310,7 @@ export default function ResultsTable({ results, query, selectedIndex, locationMa
             </span>
           )}
         </span>
-        <span className="flex items-center gap-2">
-          <span>{results.length} ZIP{results.length !== 1 ? "s" : ""}</span>
-          {exactCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-              {exactCount} exact
-            </span>
-          )}
-          {prefixCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 inline-block" />
-              {prefixCount} prefix
-            </span>
-          )}
-          {substringCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 inline-block" />
-              {substringCount} substring
-            </span>
-          )}
-        </span>
+        <span>{results.length} ZIP{results.length === 1 ? "" : "s"} found</span>
       </div>
     </div>
   );

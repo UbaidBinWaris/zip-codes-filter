@@ -92,7 +92,7 @@ export default function SearchBar({
         )}
 
         {!isSearching && queryTooShort && (
-          <span className="text-gray-400">Type at least 3 characters to search.</span>
+          <span className="text-gray-400">Type at least 5 digits to search.</span>
         )}
 
         {!isSearching && hasInput && !queryTooShort && matchSummary === null && (
@@ -112,35 +112,14 @@ export default function SearchBar({
 // ---------------------------------------------------------------------------
 
 function StatusPills({ summary }: { readonly summary: MatchSummary }) {
-  const { exact, prefix, substring, total } = summary;
+  const { total } = summary;
 
   return (
     <span className="flex items-center gap-1.5 flex-wrap">
-      <span className="text-gray-500 text-xs">
-        {total} result{total !== 1 ? "s" : ""}
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+        {total} exact match{total === 1 ? "" : "es"}
       </span>
-      <span className="text-gray-300">·</span>
-
-      {exact > 0 && (
-        <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">
-          <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-          {exact} exact
-        </span>
-      )}
-
-      {prefix > 0 && (
-        <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
-          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 inline-block" />
-          {prefix} prefix
-        </span>
-      )}
-
-      {substring > 0 && (
-        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-400 inline-block" />
-          {substring} substring
-        </span>
-      )}
     </span>
   );
 }

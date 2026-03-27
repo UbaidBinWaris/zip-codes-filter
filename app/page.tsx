@@ -1,25 +1,15 @@
-import path from "path";
-import fs from "fs";
-import { parseCSV } from "@/lib/parseCSV";
-import { buildIndex } from "@/lib/search";
+import { prisma } from "@/lib/prisma";
+import { buildIndexFromDB } from "@/lib/dbSearch";
 import ZipSearch from "@/components/ZipSearch";
 
 /**
- * Server Component — reads and parses the CSV once at request time,
- * builds the search index, then passes it to the client ZipSearch component.
- *
- * Swap `readCsvFromDisk` with an API/DB call here when you migrate away from CSV.
+ * Server Component — queries all ZIPs from PostgreSQL, builds the search
+ * index, then passes it to the client ZipSearch component.
  */
 export default async function HomePage() {
-  // ── Load & parse data (server-side only) ──────────────────────────────────
-  const csvPath = path.join(process.cwd(), "data.csv");
-  const csvContent = fs.readFileSync(csvPath, "utf-8");
-  const rows = parseCSV(csvContent);
-  const index = buildIndex(rows);
-
-  // The index (with Maps) must be serialised to plain objects before crossing
-  // the server→client boundary via props. Maps are already plain objects in
-  // our SearchIndex type, so no extra work needed.
+  // ── Load data from DB (server-side only) ──────────────────────────────────
+  const dbZips = await prisma.zip.findMany({ include: { matches: true } });
+  const index = buildIndexFromDB(dbZips);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -45,9 +35,7 @@ export default async function HomePage() {
               <span className="text-base font-semibold text-gray-900">ZIP Code Search</span>
             </div>
             <div className="flex items-center gap-4 text-xs text-gray-400">
-              <span>{rows.length.toLocaleString()} rows</span>
-              <span>·</span>
-              <span>{Object.keys(index.exactMap).length.toLocaleString()} unique ZIPs</span>
+              <span>{dbZips.length.toLocaleString()} unique ZIPs</span>
             </div>
           </div>
         </div>
@@ -62,7 +50,6 @@ export default async function HomePage() {
           </h1>
           <p className="mt-2 text-base text-gray-500">
             Search across Transfer Buyers and LG Buyers categories.
-            Exact matches are ranked first; partial / substring matches follow.
           </p>
         </div>
 
@@ -72,7 +59,7 @@ export default async function HomePage() {
 
       {/* ── Footer ──────────────────────────────────────────────────────────── */}
       <footer className="mt-20 border-t border-gray-100 py-6 text-center text-xs text-gray-300">
-        Data sourced from local CSV · future-ready for API/DB migration
+        Data sourced from PostgreSQL database
       </footer>
     </div>
   );
