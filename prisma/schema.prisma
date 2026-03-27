@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Zip {
+  id      Int        @id @default(autoincrement())
+  zip     String     @unique
+  city    String?
+  state   String?
+  matches ZipMatch[]
+
+  @@index([zip])
+}
+
+model ZipMatch {
+  id    Int    @id @default(autoincrement())
+  group String
+  label String
+  zipId Int
+  zip   Zip    @relation(fields: [zipId], references: [id], onDelete: Cascade)
+
+  @@index([zipId])
+}
