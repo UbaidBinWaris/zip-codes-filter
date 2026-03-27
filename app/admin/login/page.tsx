@@ -119,7 +119,7 @@ function LoginForm() {
         </div>
 
         <p className="mt-6 text-center text-xs text-gray-400">
-          ZIP Code Admin · credentials set in <code className="font-mono">.env</code>
+          ZIP Code Admin
         </p>
       </div>
     </div>
