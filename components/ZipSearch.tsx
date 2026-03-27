@@ -27,6 +27,21 @@ const MIN_QUERY = 5;
 /** Maximum number of ZIPs for which we will request location data. */
 const LOCATION_FETCH_LIMIT = 50;
 
+/**
+ * Normalize a raw ZIP input before searching.
+ *
+ * Pure-digit strings are left-padded with zeros so that a user typing
+ * "1010" automatically resolves to "01010", matching how leading-zero ZIPs
+ * are stored in the database.
+ *
+ * Non-digit input (e.g. letters) is returned unchanged so the MIN_QUERY
+ * length check still rejects it normally.
+ */
+function normalizeZip(input: string): string {
+  const clean = input.trim().replace(/^\*+/, "");
+  return /^\d+$/.test(clean) ? clean.padStart(5, "0") : clean;
+}
+
 export default function ZipSearch({ index }: Props) {
   const [inputValue, setInputValue] = useState("");
   const [query, setQuery] = useState("");
@@ -93,8 +108,10 @@ export default function ZipSearch({ index }: Props) {
 
   // ── Search ─────────────────────────────────────────────────────────────────
   const results: ZipResult[] = useMemo(() => {
-    if (query.trim().length < MIN_QUERY) return [];
-    return search(index, query).filter((r) => r.matchType === "exact");
+    if (!query.trim()) return [];
+    const normalized = normalizeZip(query);
+    if (normalized.length < MIN_QUERY) return [];
+    return search(index, normalized).filter((r) => r.matchType === "exact");
   }, [index, query]);
 
   // Keep ref in sync so handleKeyDown always sees the latest length
@@ -163,7 +180,9 @@ export default function ZipSearch({ index }: Props) {
     return { exact, prefix, substring, total: results.length };
   }, [results]);
 
-  const cleanQuery = query.trim().replace(/^\*+/, "");
+  // Normalize the committed query — used for search display and status checks.
+  // "1010" becomes "01010" so the UI reflects what was actually searched.
+  const cleanQuery = normalizeZip(query);
 
   return (
     <div className="w-full">
@@ -172,13 +191,13 @@ export default function ZipSearch({ index }: Props) {
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         isSearching={isSearching}
-        matchSummary={query.trim().length >= MIN_QUERY ? matchSummary : null}
+        matchSummary={normalizeZip(query).length >= MIN_QUERY ? matchSummary : null}
         hasInput={query.trim().length > 0}
-        queryTooShort={inputValue.trim().length > 0 && inputValue.trim().length < MIN_QUERY}
+        queryTooShort={inputValue.trim().length > 0 && normalizeZip(inputValue).length < MIN_QUERY}
       />
 
       {/* Empty state */}
-      {!isSearching && query.trim().length >= MIN_QUERY && results.length === 0 && (
+      {!isSearching && normalizeZip(query).length >= MIN_QUERY && results.length === 0 && (
         <div className="mt-12 flex flex-col items-center gap-3 text-gray-400">
           <svg
             className="h-12 w-12"
@@ -222,7 +241,7 @@ export default function ZipSearch({ index }: Props) {
             Search across {index.rows.length.toLocaleString()} ZIP entries
           </p>
           <p className="text-sm text-gray-300">
-            Enter a full 5-digit ZIP code to find matches
+            Enter a ZIP code — leading zeros are added automatically
           </p>
         </div>
       )}
