@@ -107,18 +107,38 @@ export const MATCH_SCORES: Record<MatchType, number> = {
 
 export const MAX_RESULTS = 100;
 
-export interface ColumnMatch {
-  columnKey: ColumnKey;
-  zip: string;
+export interface ZipMatch {
+  /** e.g. "D5", "B3 LG", "Home CPA Transfer" */
+  group: string;
+  /** e.g. "Roof", "Cabinets", "Window" */
+  label: string;
 }
 
-export interface SearchResult {
-  row: ZipRow;
+export interface ZipResult {
+  zip: string;
+  /** Populated from a lookup table; "Unknown" when unavailable. */
+  city: string;
+  /** State code from the CSV row, or "Unknown" when unavailable. */
+  state: string;
   matchType: MatchType;
-  /** Highest score among all column matches for this row. */
+  /** Highest match score for this ZIP across all matched columns. */
   score: number;
-  matches: ColumnMatch[];
+  matches: ZipMatch[];
 }
+
+/** Resolved location for a ZIP code. */
+export interface ZipLocation {
+  city: string;
+  state: string;
+}
+
+/**
+ * Per-ZIP location fetch status.
+ *  "loading" → request in-flight
+ *  "error"   → request failed or API returned no result
+ *  ZipLocation → resolved successfully
+ */
+export type LocationEntry = ZipLocation | "loading" | "error";
 
 /** Summary counts passed to the status bar. */
 export interface MatchSummary {

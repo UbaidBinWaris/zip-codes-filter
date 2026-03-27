@@ -3,10 +3,10 @@ import {
   MATCH_SCORES,
   MAX_RESULTS,
   type ColumnKey,
-  type ColumnMatch,
   type MatchType,
   type SearchIndex,
-  type SearchResult,
+  type ZipMatch,
+  type ZipResult,
   type ZipRow,
 } from "./types";
 
@@ -81,31 +81,39 @@ function normalizeQuery(raw: string): string[] {
 
 const MIN_QUERY_LENGTH = 3;
 
+// Precomputed map from column key to column definition for O(1) lookup
+const COL_BY_KEY = new Map(COLUMNS.map((c) => [c.key, c]));
+
 /**
  * Search the index for a query string.
+ *
+ * Returns one ZipResult per matched ZIP code — aggregated across all rows
+ * and columns in which that ZIP appears.
  *
  * Ranking:
  *  1. Exact    (score 100) — zip === query
  *  2. Prefix   (score  70) — zip.startsWith(query)
  *  3. Substring(score  40) — zip.includes(query) and none of the above
  *
- * - Results are de-duplicated per row (a row appears once even if many columns match).
- * - A row's score = highest score among its matched columns.
+ * - Results are de-duplicated per ZIP (a ZIP appears once even if it spans
+ *   multiple rows or columns).
+ * - A ZIP's score = highest score among all its column matches.
  * - Results are sorted by score DESC, capped at MAX_RESULTS.
  * - Leading-zero variants are resolved automatically.
  */
-export function search(index: SearchIndex, rawQuery: string): SearchResult[] {
+export function search(index: SearchIndex, rawQuery: string): ZipResult[] {
   const queries = normalizeQuery(rawQuery);
   if (!queries.length || queries[0].length < MIN_QUERY_LENGTH) return [];
 
-  // rowId → accumulated hit (we keep only the best match type per row)
-  interface Accum {
+  // zip → accumulated hit data
+  interface ZipAccum {
     matchType: MatchType;
     score: number;
-    matches: ColumnMatch[];
-    seen: Set<ColumnKey>; // deduplicate columns
+    state: string;
+    matches: ZipMatch[];
+    seenKeys: Set<ColumnKey>;
   }
-  const rowMap = new Map<number, Accum>();
+  const zipMap = new Map<string, ZipAccum>();
 
   function addHit(
     rowId: number,
@@ -114,19 +122,36 @@ export function search(index: SearchIndex, rawQuery: string): SearchResult[] {
     mt: MatchType
   ) {
     const sc = MATCH_SCORES[mt];
-    if (!rowMap.has(rowId)) {
-      rowMap.set(rowId, { matchType: mt, score: sc, matches: [], seen: new Set() });
+    const col = COL_BY_KEY.get(columnKey)!;
+    const rowState = index.rows[rowId].state;
+
+    if (!zipMap.has(zip)) {
+      zipMap.set(zip, {
+        matchType: mt,
+        score: sc,
+        state: rowState,
+        matches: [],
+        seenKeys: new Set(),
+      });
     }
-    const acc = rowMap.get(rowId)!;
+
+    const acc = zipMap.get(zip)!;
+
     // Upgrade if this column's match is stronger
     if (sc > acc.score) {
       acc.score = sc;
       acc.matchType = mt;
     }
-    // Deduplicate columns within the same row
-    if (!acc.seen.has(columnKey)) {
-      acc.seen.add(columnKey);
-      acc.matches.push({ columnKey, zip });
+
+    // Take state from this row if not already set
+    if (!acc.state && rowState) {
+      acc.state = rowState;
+    }
+
+    // Deduplicate column entries within the same ZIP
+    if (!acc.seenKeys.has(columnKey)) {
+      acc.seenKeys.add(columnKey);
+      acc.matches.push({ group: col.subGroup, label: col.label });
     }
   }
 
@@ -149,22 +174,23 @@ export function search(index: SearchIndex, rawQuery: string): SearchResult[] {
 
   // ── Step 3: substring  (linear scan — only runs on non-exact/prefix entries) ──
   for (const e of index.prefixEntries) {
-    // Skip anything already classified as exact or prefix for any query variant
     if (queries.some((q) => e.zip === q || e.zip.startsWith(q))) continue;
     if (!queries.some((q) => e.zip.includes(q))) continue;
     addHit(e.rowId, e.columnKey, e.zip, "substring");
   }
 
   // ── Assemble, sort by score DESC, cap ────────────────────────────────────
-  const results: SearchResult[] = [];
-  Array.from(rowMap.entries()).forEach(([rowId, acc]) => {
+  const results: ZipResult[] = [];
+  for (const [zip, acc] of zipMap) {
     results.push({
-      row: index.rows[rowId],
+      zip,
+      city: "Unknown",
+      state: acc.state || "Unknown",
       matchType: acc.matchType,
       score: acc.score,
       matches: acc.matches,
     });
-  });
+  }
 
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, MAX_RESULTS);

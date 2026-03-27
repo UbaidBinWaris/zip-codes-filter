@@ -8,7 +8,12 @@ import {
   useRef,
   type KeyboardEvent,
 } from "react";
-import type { MatchSummary, SearchIndex, SearchResult } from "@/lib/types";
+import type {
+  LocationEntry,
+  MatchSummary,
+  SearchIndex,
+  ZipResult,
+} from "@/lib/types";
 import { search } from "@/lib/search";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
@@ -19,16 +24,25 @@ interface Props {
 
 const DEBOUNCE_MS = 300;
 const MIN_QUERY = 3;
+/** Maximum number of ZIPs for which we will request location data. */
+const LOCATION_FETCH_LIMIT = 50;
 
 export default function ZipSearch({ index }: Props) {
   const [inputValue, setInputValue] = useState("");
   const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [locationMap, setLocationMap] = useState<Record<string, LocationEntry>>({});
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Always-current result length for use inside stable callbacks
   const resultsLengthRef = useRef(0);
+  /**
+   * Tracks ZIPs that have already been fetched (or whose fetch is in-flight),
+   * so we never re-issue a request for the same ZIP within this page session.
+   * Errors are removed from this set so that a new search can trigger a retry.
+   */
+  const fetchedZipsRef = useRef(new Set<string>());
 
   // ── Debounced input ────────────────────────────────────────────────────────
   const handleChange = useCallback((value: string) => {
@@ -72,20 +86,70 @@ export default function ZipSearch({ index }: Props) {
         case "Escape":
           handleChange("");
           break;
-        // Enter: row is already highlighted; extend here for future detail view
       }
     },
     [handleChange]
   );
 
   // ── Search ─────────────────────────────────────────────────────────────────
-  const results: SearchResult[] = useMemo(() => {
+  const results: ZipResult[] = useMemo(() => {
     if (query.trim().length < MIN_QUERY) return [];
     return search(index, query);
   }, [index, query]);
 
   // Keep ref in sync so handleKeyDown always sees the latest length
   resultsLengthRef.current = results.length;
+
+  // ── Location fetching ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (results.length === 0) return;
+
+    // Only consider the top N results to cap API usage
+    const zipsToFetch = results
+      .slice(0, LOCATION_FETCH_LIMIT)
+      .map((r) => r.zip)
+      .filter((zip) => !fetchedZipsRef.current.has(zip));
+
+    if (zipsToFetch.length === 0) return;
+
+    // Mark all as in-flight immediately so concurrent renders don't double-fetch
+    for (const zip of zipsToFetch) {
+      fetchedZipsRef.current.add(zip);
+    }
+
+    // Reflect loading state in the UI without blocking
+    setLocationMap((prev) => {
+      const next = { ...prev };
+      for (const zip of zipsToFetch) {
+        next[zip] = "loading";
+      }
+      return next;
+    });
+
+    // Fire individual requests — they resolve independently as they arrive
+    for (const zip of zipsToFetch) {
+      fetch(`https://api.zippopotam.us/us/${zip}`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data) => {
+          const place = data.places?.[0];
+          setLocationMap((prev) => ({
+            ...prev,
+            [zip]: {
+              city:  place?.["place name"]          || "Unknown",
+              state: place?.["state abbreviation"]  || "Unknown",
+            },
+          }));
+        })
+        .catch(() => {
+          // Remove from the fetched set so a future search can retry
+          fetchedZipsRef.current.delete(zip);
+          setLocationMap((prev) => ({ ...prev, [zip]: "error" }));
+        });
+    }
+  }, [results]); // intentionally excludes locationMap to avoid re-fetch loops
 
   // ── Match summary for the status bar ──────────────────────────────────────
   const matchSummary: MatchSummary | null = useMemo(() => {
@@ -169,6 +233,7 @@ export default function ZipSearch({ index }: Props) {
           results={results}
           query={cleanQuery}
           selectedIndex={selectedIndex}
+          locationMap={locationMap}
         />
       )}
     </div>
