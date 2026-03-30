@@ -8,21 +8,31 @@ datasource db {
 }
 
 model Zip {
-  id      Int        @id @default(autoincrement())
-  zip     String     @unique
-  city    String?
-  state   String?
-  matches ZipMatch[]
+  id          Int           @id @default(autoincrement())
+  zip         String        @unique
+  city        String?
+  state       String?
+  ZipVertical ZipVertical[]
 
   @@index([zip])
 }
 
-model ZipMatch {
-  id    Int    @id @default(autoincrement())
-  group String
-  label String
-  zipId Int
-  zip   Zip    @relation(fields: [zipId], references: [id], onDelete: Cascade)
+model Vertical {
+  id          Int           @id @default(autoincrement())
+  name        String
+  label       String
+  group       String?
+  ZipVertical ZipVertical[]
 
-  @@index([zipId])
+  @@unique([name, label])
+}
+
+model ZipVertical {
+  id         Int      @id @default(autoincrement())
+  zipId      Int
+  verticalId Int
+  zip        Zip      @relation(fields: [zipId], references: [id], onDelete: Cascade)
+  vertical   Vertical @relation(fields: [verticalId], references: [id], onDelete: Cascade)
+
+  @@unique([zipId, verticalId])
 }

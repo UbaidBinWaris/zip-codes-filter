@@ -1,188 +1,154 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useMemo,
-  useCallback,
-  useRef,
-  type KeyboardEvent,
-} from "react";
-import type {
-  LocationEntry,
-  MatchSummary,
-  SearchIndex,
-  ZipResult,
-} from "@/lib/types";
-import { search } from "@/lib/search";
+import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
 
-interface Props {
-  readonly index: SearchIndex;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface SearchResult {
+  zip: string;
+  state: string | null;
+  city: string | null;
+  /** vertical name → labels */
+  groups: Record<string, string[]>;
 }
 
-const DEBOUNCE_MS = 300;
-const MIN_QUERY = 5;
-/** Maximum number of ZIPs for which we will request location data. */
-const LOCATION_FETCH_LIMIT = 50;
+type LocationEntry =
+  | { city: string; state: string }
+  | "loading"
+  | "error"
+  | null;
 
-/**
- * Normalize a raw ZIP input before searching.
- *
- * Pure-digit strings are left-padded with zeros so that a user typing
- * "1010" automatically resolves to "01010", matching how leading-zero ZIPs
- * are stored in the database.
- *
- * Non-digit input (e.g. letters) is returned unchanged so the MIN_QUERY
- * length check still rejects it normally.
- */
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_MS = 300;
+
 function normalizeZip(input: string): string {
-  const clean = input.trim().replace(/^\*+/, "");
+  const clean = input.trim().replace(/\*/g, "");
   return /^\d+$/.test(clean) ? clean.padStart(5, "0") : clean;
 }
 
-export default function ZipSearch({ index }: Props) {
-  const [inputValue, setInputValue] = useState("");
-  const [query, setQuery] = useState("");
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export default function ZipSearch() {
+  const [inputValue,  setInputValue]  = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [locationMap, setLocationMap] = useState<Record<string, LocationEntry>>({});
+  const [result,      setResult]      = useState<SearchResult | "not-found" | null>(null);
+  const [location,    setLocation]    = useState<LocationEntry>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Always-current result length for use inside stable callbacks
-  const resultsLengthRef = useRef(0);
-  /**
-   * Tracks ZIPs that have already been fetched (or whose fetch is in-flight),
-   * so we never re-issue a request for the same ZIP within this page session.
-   * Errors are removed from this set so that a new search can trigger a retry.
-   */
-  const fetchedZipsRef = useRef(new Set<string>());
+  const abortRef    = useRef<AbortController | null>(null);
 
-  // ── Debounced input ────────────────────────────────────────────────────────
-  const handleChange = useCallback((value: string) => {
-    setInputValue(value);
+  // ── Search ─────────────────────────────────────────────────────────────────
+
+  const doSearch = useCallback(async (zip: string) => {
+    // Cancel any in-flight request
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     setIsSearching(true);
-    setSelectedIndex(-1);
+    setLocation("loading");
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setQuery(value);
+    try {
+      const res = await fetch(`/api/search?zip=${encodeURIComponent(zip)}`, {
+        signal: ctrl.signal,
+      });
+
+      if (!res.ok) {
+        setResult("not-found");
+        setLocation(null);
+        return;
+      }
+
+      const data: SearchResult | null = await res.json();
+      if (!data) {
+        setResult("not-found");
+        setLocation(null);
+        return;
+      }
+      setResult(data);
+
+      // Best-effort location enrichment via Zippopotam.us
+      try {
+        const locRes = await fetch(`https://api.zippopotam.us/us/${zip}`, {
+          signal: ctrl.signal,
+        });
+        if (locRes.ok) {
+          const locData = await locRes.json();
+          const place = locData.places?.[0];
+          if (place) {
+            setLocation({
+              city:  place["place name"]         ?? "Unknown",
+              state: place["state abbreviation"] ?? "Unknown",
+            });
+            return;
+          }
+        }
+      } catch {
+        // location enrichment failed — not critical
+      }
+      setLocation(null);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      setResult("not-found");
+      setLocation("error");
+    } finally {
       setIsSearching(false);
-    }, DEBOUNCE_MS);
+    }
   }, []);
 
-  useEffect(() => {
-    return () => {
+  // ── Input handler ──────────────────────────────────────────────────────────
+
+  const handleChange = useCallback(
+    (value: string) => {
+      setInputValue(value);
+      setResult(null);
+      setLocation(null);
+
       if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, []);
 
-  // Reset selection whenever the committed query changes
-  useEffect(() => {
-    setSelectedIndex(-1);
-  }, [query]);
+      const normalized = normalizeZip(value);
+      if (normalized.length < 5 || !/^\d{5}$/.test(normalized)) {
+        setIsSearching(false);
+        return;
+      }
 
-  // ── Keyboard navigation ────────────────────────────────────────────────────
+      setIsSearching(true);
+      debounceRef.current = setTimeout(() => doSearch(normalized), DEBOUNCE_MS);
+    },
+    [doSearch]
+  );
+
+  // Keyboard handler — no list navigation needed (single result), just Escape
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      const len = resultsLengthRef.current;
-      if (len === 0) return;
-
-      switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          setSelectedIndex((prev) => Math.min(prev + 1, len - 1));
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          setSelectedIndex((prev) => Math.max(prev - 1, 0));
-          break;
-        case "Escape":
-          handleChange("");
-          break;
-      }
+      if (e.key === "Escape") handleChange("");
     },
     [handleChange]
   );
 
-  // ── Search ─────────────────────────────────────────────────────────────────
-  const results: ZipResult[] = useMemo(() => {
-    if (!query.trim()) return [];
-    const normalized = normalizeZip(query);
-    if (normalized.length < MIN_QUERY) return [];
-    return search(index, normalized).filter((r) => r.matchType === "exact");
-  }, [index, query]);
-
-  // Keep ref in sync so handleKeyDown always sees the latest length
-  resultsLengthRef.current = results.length;
-
-  // ── Location fetching ──────────────────────────────────────────────────────
+  // Cleanup on unmount
   useEffect(() => {
-    if (results.length === 0) return;
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+    };
+  }, []);
 
-    // Only consider the top N results to cap API usage
-    const zipsToFetch = results
-      .slice(0, LOCATION_FETCH_LIMIT)
-      .map((r) => r.zip)
-      .filter((zip) => !fetchedZipsRef.current.has(zip));
+  // ── Derived state ──────────────────────────────────────────────────────────
 
-    if (zipsToFetch.length === 0) return;
-
-    // Mark all as in-flight immediately so concurrent renders don't double-fetch
-    for (const zip of zipsToFetch) {
-      fetchedZipsRef.current.add(zip);
-    }
-
-    // Reflect loading state in the UI without blocking
-    setLocationMap((prev) => {
-      const next = { ...prev };
-      for (const zip of zipsToFetch) {
-        next[zip] = "loading";
-      }
-      return next;
-    });
-
-    // Fire individual requests — they resolve independently as they arrive
-    for (const zip of zipsToFetch) {
-      fetch(`https://api.zippopotam.us/us/${zip}`)
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
-        })
-        .then((data) => {
-          const place = data.places?.[0];
-          setLocationMap((prev) => ({
-            ...prev,
-            [zip]: {
-              city:  place?.["place name"]          || "Unknown",
-              state: place?.["state abbreviation"]  || "Unknown",
-            },
-          }));
-        })
-        .catch(() => {
-          // Remove from the fetched set so a future search can retry
-          fetchedZipsRef.current.delete(zip);
-          setLocationMap((prev) => ({ ...prev, [zip]: "error" }));
-        });
-    }
-  }, [results]); // intentionally excludes locationMap to avoid re-fetch loops
-
-  // ── Match summary for the status bar ──────────────────────────────────────
-  const matchSummary: MatchSummary | null = useMemo(() => {
-    if (results.length === 0) return null;
-    let exact = 0, prefix = 0, substring = 0;
-    for (const r of results) {
-      if (r.matchType === "exact") exact++;
-      else if (r.matchType === "prefix") prefix++;
-      else substring++;
-    }
-    return { exact, prefix, substring, total: results.length };
-  }, [results]);
-
-  // Normalize the committed query — used for search display and status checks.
-  // "1010" becomes "01010" so the UI reflects what was actually searched.
-  const cleanQuery = normalizeZip(query);
+  const cleanZip   = normalizeZip(inputValue);
+  const tooShort   = inputValue.trim().length > 0 && cleanZip.length < 5;
+  const hasResult  = result !== null && result !== "not-found";
+  const notFound   = result === "not-found";
 
   return (
     <div className="w-full">
@@ -191,13 +157,13 @@ export default function ZipSearch({ index }: Props) {
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         isSearching={isSearching}
-        matchSummary={normalizeZip(query).length >= MIN_QUERY ? matchSummary : null}
-        hasInput={query.trim().length > 0}
-        queryTooShort={inputValue.trim().length > 0 && normalizeZip(inputValue).length < MIN_QUERY}
+        matchSummary={null}
+        hasInput={inputValue.trim().length > 0}
+        queryTooShort={tooShort}
       />
 
-      {/* Empty state */}
-      {!isSearching && normalizeZip(query).length >= MIN_QUERY && results.length === 0 && (
+      {/* Not found */}
+      {!isSearching && notFound && (
         <div className="mt-12 flex flex-col items-center gap-3 text-gray-400">
           <svg
             className="h-12 w-12"
@@ -214,9 +180,9 @@ export default function ZipSearch({ index }: Props) {
             />
           </svg>
           <p className="text-lg font-medium text-gray-500">
-            No results for &ldquo;{cleanQuery}&rdquo;
+            No results for &ldquo;{cleanZip}&rdquo;
           </p>
-          <p className="text-sm">Try fewer digits or a different ZIP.</p>
+          <p className="text-sm">This ZIP code is not in our database.</p>
         </div>
       )}
 
@@ -238,21 +204,19 @@ export default function ZipSearch({ index }: Props) {
             />
           </svg>
           <p className="text-base font-medium text-gray-400">
-            Search across {index.rows.length.toLocaleString()} ZIP entries
+            Enter a 5-digit ZIP code
           </p>
           <p className="text-sm text-gray-300">
-            Enter a ZIP code — leading zeros are added automatically
+            Leading zeros are added automatically
           </p>
         </div>
       )}
 
-      {/* Results — only render when results exist */}
-      {results.length > 0 && (
+      {/* Result card */}
+      {hasResult && (
         <ResultsTable
-          results={results}
-          query={cleanQuery}
-          selectedIndex={selectedIndex}
-          locationMap={locationMap}
+          result={result as SearchResult}
+          location={location}
         />
       )}
     </div>

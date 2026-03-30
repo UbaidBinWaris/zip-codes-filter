@@ -1,15 +1,12 @@
 import { prisma } from "@/lib/prisma";
-import { buildIndexFromDB } from "@/lib/dbSearch";
 import ZipSearch from "@/components/ZipSearch";
 
 /**
- * Server Component — queries all ZIPs from PostgreSQL, builds the search
- * index, then passes it to the client ZipSearch component.
+ * Server Component — fetches total ZIP count, then hands off to the
+ * client ZipSearch island which calls /api/search for exact lookups.
  */
 export default async function HomePage() {
-  // ── Load data from DB (server-side only) ──────────────────────────────────
-  const dbZips = await prisma.zip.findMany({ include: { matches: true } });
-  const index = buildIndexFromDB(dbZips);
+  const count = await prisma.zip.count();
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -34,27 +31,26 @@ export default async function HomePage() {
               </div>
               <span className="text-base font-semibold text-gray-900">ZIP Code Search</span>
             </div>
-            <div className="flex items-center gap-4 text-xs text-gray-400">
-              <span>{dbZips.length.toLocaleString()} unique ZIPs</span>
+            <div className="text-xs text-gray-400">
+              {count.toLocaleString()} unique ZIPs
             </div>
           </div>
         </div>
       </header>
 
       {/* ── Main ────────────────────────────────────────────────────────────── */}
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
-        {/* Hero text */}
+      <main className="mx-auto max-w-2xl px-4 sm:px-6 lg:px-8 py-10">
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
             ZIP Code Lookup
           </h1>
           <p className="mt-2 text-base text-gray-500">
-            Search across Transfer Buyers and LG Buyers categories.
+            Enter an exact ZIP code to see its verticals.
           </p>
         </div>
 
-        {/* Search + results (client interactive island) */}
-        <ZipSearch index={index} />
+        {/* Client interactive island — no server-side index needed */}
+        <ZipSearch />
       </main>
 
       {/* ── Footer ──────────────────────────────────────────────────────────── */}

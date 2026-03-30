@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 // ---------------------------------------------------------------------------
-// Shared types (used by admin client as well)
+// Shared payload types (used by admin client + [id]/route.ts)
 // ---------------------------------------------------------------------------
 
-export interface ZipMatchPayload {
-  group: string;
+export interface VerticalPayload {
+  name: string;
   label: string;
 }
 
@@ -14,7 +14,40 @@ export interface ZipPayload {
   zip: string;
   city?: string;
   state?: string;
-  matches?: ZipMatchPayload[];
+  verticals?: VerticalPayload[];
+}
+
+// ---------------------------------------------------------------------------
+// Shared include clause
+// ---------------------------------------------------------------------------
+
+const zipInclude = {
+  ZipVertical: {
+    include: { vertical: true },
+    orderBy: [
+      { vertical: { name: "asc" as const } },
+      { vertical: { label: "asc" as const } },
+    ],
+  },
+} as const;
+
+function formatZip(z: {
+  id: number;
+  zip: string;
+  city: string | null;
+  state: string | null;
+  ZipVertical: { vertical: { name: string; label: string } }[];
+}) {
+  return {
+    id: z.id,
+    zip: z.zip,
+    city: z.city,
+    state: z.state,
+    verticals: z.ZipVertical.map((zv) => ({
+      name: zv.vertical.name,
+      label: zv.vertical.label,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -24,8 +57,8 @@ export interface ZipPayload {
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
 
-  const page   = Math.max(1, parseInt(searchParams.get("page")  ?? "1", 10));
-  const limit  = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
+  const page  = Math.max(1, Number.parseInt(searchParams.get("page")  ?? "1",  10));
+  const limit = Math.min(100, Math.max(1, Number.parseInt(searchParams.get("limit") ?? "20", 10)));
   const search = searchParams.get("search")?.trim() ?? "";
 
   const where = search
@@ -41,7 +74,7 @@ export async function GET(request: NextRequest) {
   const [data, total] = await Promise.all([
     prisma.zip.findMany({
       where,
-      include: { matches: { orderBy: [{ group: "asc" }, { label: "asc" }] } },
+      include: zipInclude,
       orderBy: { zip: "asc" },
       skip:  (page - 1) * limit,
       take:  limit,
@@ -49,11 +82,17 @@ export async function GET(request: NextRequest) {
     prisma.zip.count({ where }),
   ]);
 
-  return NextResponse.json({ data, total, page, limit, pages: Math.ceil(total / limit) });
+  return NextResponse.json({
+    data:  data.map(formatZip),
+    total,
+    page,
+    limit,
+    pages: Math.ceil(total / limit),
+  });
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/zips  →  create a new ZIP with optional matches
+// POST /api/zips  →  create a new ZIP with optional verticals
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
@@ -69,10 +108,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "zip is required" }, { status: 400 });
   }
 
-  // Guard against duplicates
   const existing = await prisma.zip.findUnique({ where: { zip } });
   if (existing) {
     return NextResponse.json({ error: `ZIP ${zip} already exists` }, { status: 409 });
+  }
+
+  // Upsert each Vertical (find-or-create by unique name+label)
+  const verticalIds: number[] = [];
+  for (const v of body.verticals ?? []) {
+    if (!v.name?.trim() || !v.label?.trim()) continue;
+    const vertical = await prisma.vertical.upsert({
+      where: { name_label: { name: v.name.trim(), label: v.label.trim() } },
+      create: { name: v.name.trim(), label: v.label.trim() },
+      update: {},
+    });
+    verticalIds.push(vertical.id);
   }
 
   const created = await prisma.zip.create({
@@ -80,15 +130,12 @@ export async function POST(request: NextRequest) {
       zip,
       city:  body.city?.trim()  || null,
       state: body.state?.trim() || null,
-      matches: {
-        create: (body.matches ?? []).map((m) => ({
-          group: m.group.trim(),
-          label: m.label.trim(),
-        })),
+      ZipVertical: {
+        create: verticalIds.map((verticalId) => ({ verticalId })),
       },
     },
-    include: { matches: true },
+    include: zipInclude,
   });
 
-  return NextResponse.json(created, { status: 201 });
+  return NextResponse.json(formatZip(created), { status: 201 });
 }
